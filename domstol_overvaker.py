@@ -9,6 +9,7 @@ API_URL = "https://www.domstol.no/api/episerver/v3/beramming"
 CACHE_FILE = Path("cache.json")
 
 DOMSTOL_NAVN = "Søndre Østfold tingrett"
+DOMSTOL_ID = os.environ.get("DOMSTOL_ID")
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
 SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
@@ -47,11 +48,15 @@ def skriv_cache(cache):
 
 
 def hent_saker():
+    if not DOMSTOL_ID:
+        raise RuntimeError("DOMSTOL_ID mangler i GitHub Secrets")
+
     today = datetime.now()
 
     params = {
         "fraDato": (today - timedelta(days=14)).strftime("%Y-%m-%d"),
         "tilDato": (today + timedelta(days=365)).strftime("%Y-%m-%d"),
+        "domstolid": DOMSTOL_ID,
         "sortTerm": "rettsmoete",
         "sortAscending": "true",
         "pageSize": "1000",
@@ -68,7 +73,7 @@ def hent_saker():
 
     data = response.json()
     hits = data.get("hits", [])
-    print(f"Hentet {len(hits)} saker fra API-et")
+    print(f"Hentet {len(hits)} saker fra API-et for {DOMSTOL_NAVN}")
     return hits
 
 
@@ -236,18 +241,12 @@ def main():
 
     idag = datetime.now().date()
 
-    antall_riktig_domstol = 0
     antall_riktig_sakstype = 0
     antall_fremtidige = 0
     antall_nye_saker = 0
     antall_sendt = 0
 
     for sak in saker:
-        domstol = sak.get("domstol", "")
-        if domstol != DOMSTOL_NAVN:
-            continue
-        antall_riktig_domstol += 1
-
         saksnr = sak.get("saksnummer", "")
         if not any(sakstype in saksnr for sakstype in SAKSTYPER):
             continue
@@ -270,7 +269,7 @@ def main():
         antall_nye_saker += 1
 
         sakinfo = {
-            "domstol": domstol,
+            "domstol": sak.get("domstol") or DOMSTOL_NAVN,
             "saksnr": saksnr,
             "rettsmoete": formater_rettsmoete(sak),
             "saken_gjelder": sak.get("sakenGjelder") or "–",
@@ -290,7 +289,6 @@ def main():
 
     skriv_cache(cache)
 
-    print(f"Saker i riktig domstol: {antall_riktig_domstol}")
     print(f"Saker med riktig sakstype: {antall_riktig_sakstype}")
     print(f"Fremtidige saker: {antall_fremtidige}")
     print(f"Nye saker: {antall_nye_saker}")
