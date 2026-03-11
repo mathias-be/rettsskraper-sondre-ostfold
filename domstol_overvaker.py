@@ -17,9 +17,12 @@ SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
 HIGH_PRIORITY_WORDS = [
     "barn",
     "unge",
+    "narkotika", 
     "ungdom",
     "mindreår",
     "mindreårig",
+    "grov",
+    "førstegangsfengsling", 
     "ran",
     "drap",
 ]
@@ -189,12 +192,18 @@ def vurder_sak(sak):
     score = 0
     reasons = []
 
+    # Alle straffesaker er interessante som basis
     if sakstype == "TOV":
         score += 3
         reasons.append("straffesak (TOV)")
-    elif sakstype in ("MED", "SKJ"):
+    elif sakstype == "MED":
+        score += 2
+        reasons.append("meddomssak (MED)")
+    elif sakstype == "SKJ":
         score += 1
-        reasons.append(f"sakstype {sakstype}")
+        reasons.append("kjennelse/skjønn (SKJ)")
+    elif sakstype == "TVI":
+        reasons.append("tvistesak (TVI)")
 
     for word in HIGH_PRIORITY_WORDS:
         if word in samlet_text:
@@ -344,11 +353,9 @@ def main():
 
         vurdering = vurder_sak(sak)
 
-        if vurdering["nivå"] in ("medium", "high"):
-            send_slack_varsel(sakinfo, vurdering)
-            antall_sendt += 1
-        else:
-            print(f"Skipper lav prioritet: {saksnr}")
+        # SEND ALLTID, også low og MED
+        send_slack_varsel(sakinfo, vurdering)
+        antall_sendt += 1
 
         cache[cache_key] = datetime.now().isoformat()
 
