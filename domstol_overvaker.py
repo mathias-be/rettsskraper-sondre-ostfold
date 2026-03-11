@@ -14,7 +14,6 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
 SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
 
-# Skal gi HØY interesse
 HIGH_PRIORITY_WORDS = [
     "barn",
     "unge",
@@ -25,7 +24,6 @@ HIGH_PRIORITY_WORDS = [
     "drap",
 ]
 
-# Skal gi INTERESSANT, ikke høy
 MEDIUM_PRIORITY_WORDS = [
     "arbeidsforhold",
     "arbeidsmiljø",
@@ -37,7 +35,6 @@ MEDIUM_PRIORITY_WORDS = [
     "varsling",
 ]
 
-# Ord som ofte finnes i familietvister / saker dere normalt ikke vil prioritere opp
 LOW_PRIORITY_WORDS = [
     "foreldretvist",
     "foreldreansvar",
@@ -57,6 +54,12 @@ INTERESTING_PARTIES = [
     "universitet",
 ]
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json",
+    "Referer": "https://www.domstol.no/no/nar-gar-rettssaken/",
+}
+
 
 def les_cache():
     if CACHE_FILE.exists():
@@ -73,34 +76,62 @@ def skriv_cache(cache):
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
-def hent_saker():
+def bygg_params(page_number):
     if not DOMSTOL_ID:
         raise RuntimeError("DOMSTOL_ID mangler i GitHub Secrets")
 
     today = datetime.now()
 
-    params = {
+    return {
         "fraDato": (today - timedelta(days=14)).strftime("%Y-%m-%d"),
         "tilDato": (today + timedelta(days=365)).strftime("%Y-%m-%d"),
         "domstolid": DOMSTOL_ID,
         "sortTerm": "rettsmoete",
         "sortAscending": "true",
         "pageSize": "1000",
+        "pageNumber": str(page_number),
     }
 
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-        "Referer": "https://www.domstol.no/no/nar-gar-rettssaken/",
-    }
 
-    response = requests.get(API_URL, params=params, headers=headers, timeout=30)
+def hent_en_side(page_number):
+    response = requests.get(
+        API_URL,
+        params=bygg_params(page_number),
+        headers=HEADERS,
+        timeout=30,
+    )
     response.raise_for_status()
+    return response.json()
 
-    data = response.json()
-    hits = data.get("hits", [])
-    print(f"Hentet {len(hits)} saker fra API-et for {DOMSTOL_NAVN}")
-    return hits
+
+def hent_alle_saker():
+    alle_saker = []
+    page_number = 1
+    rapportert_total = None
+
+    while True:
+        data = hent_en_side(page_number)
+        hits = data.get("hits", [])
+        count = data.get("count")
+
+        if rapportert_total is None:
+            rapportert_total = count
+            print(f"API-et rapporterer totalt {rapportert_total} saker for {DOMSTOL_NAVN}")
+
+        print(f"Hentet side {page_number}: {len(hits)} saker")
+
+        if not hits:
+            break
+
+        alle_saker.extend(hits)
+
+        if len(hits) < 1000:
+            break
+
+        page_number += 1
+
+    print(f"Hentet totalt {len(alle_saker)} saker fra API-et for {DOMSTOL_NAVN}")
+    return alle_saker
 
 
 def bygg_sakslenke(sak_id):
@@ -158,7 +189,6 @@ def vurder_sak(sak):
     score = 0
     reasons = []
 
-    # Alle straffesaker er interessante som basis
     if sakstype == "TOV":
         score += 3
         reasons.append("straffesak (TOV)")
@@ -166,13 +196,11 @@ def vurder_sak(sak):
         score += 1
         reasons.append(f"sakstype {sakstype}")
 
-    # Høy interesse
     for word in HIGH_PRIORITY_WORDS:
         if word in samlet_text:
             score += 5
             reasons.append(f'treff på "{word}"')
 
-    # Interessant
     for word in MEDIUM_PRIORITY_WORDS:
         if word in samlet_text:
             score += 2
@@ -183,7 +211,6 @@ def vurder_sak(sak):
             score += 1
             reasons.append(f'part inneholder "{word}"')
 
-    # Trekk ned typiske familietvister, men ikke hvis saken allerede er høy
     low_hits = []
     for word in LOW_PRIORITY_WORDS:
         if word in samlet_text:
@@ -275,7 +302,7 @@ def send_slack_varsel(sakinfo, vurdering):
 
 def main():
     cache = les_cache()
-    saker = hent_saker()
+    saker = hent_alle_saker()
 
     idag = datetime.now().date()
 
