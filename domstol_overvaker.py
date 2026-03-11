@@ -11,8 +11,24 @@ CACHE_FILE = Path("cache.json")
 DOMSTOL_NAVN = "Søndre Østfold tingrett"
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
-VARSEL_DAGER = 14
-SAKSTYPER = ("TVI", "MED", "SKJ")
+SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
+
+HIGH_PRIORITY_WORDS = [
+    "drap", "voldtekt", "seksu", "overgrep", "mishandling", "vold",
+    "ran", "underslag", "bedrageri", "svindel", "korrupsjon",
+    "oppsigelse", "avskjed", "arbeidsmiljø", "barnevern",
+    "kommune", "politiet", "sykehus", "skole", "offentlig",
+]
+
+MEDIUM_PRIORITY_WORDS = [
+    "erstatning", "kontrakt", "tvist", "arbeidsrett",
+    "nabotvist", "eiendom", "byggetvist", "entreprise",
+]
+
+ALWAYS_INTERESTING_PARTIES = [
+    "kommune", "as", "politi", "sykehus", "statsforvalter",
+    "skatteetaten", "nav", "skole", "universitet",
+]
 
 
 def les_cache():
@@ -60,37 +76,136 @@ def bygg_sakslenke(sak_id):
     return f"https://www.domstol.no/no/nar-gar-rettssaken/?saksid={sak_id}"
 
 
-def send_slack_varsel(sakinfo):
+def finn_sakstype(saksnr):
+    for stype in SAKSTYPER:
+        if stype in saksnr:
+            return stype
+    return "UKJENT"
+
+
+def vurder_sak(sak):
+    saken_gjelder = (sak.get("sakenGjelder") or "").lower()
+    parter = (sak.get("parter") or "").lower()
+    saksnr = sak.get("saksnummer", "")
+    sakstype = finn_sakstype(saksnr)
+
+    score = 0
+    reasons = []
+
+    if sakstype == "TOV":
+        score += 3
+        reasons.append("sakstype TOV")
+    elif sakstype in ("MED", "SKJ"):
+        score += 2
+        reasons.append(f"sakstype {sakstype}")
+    elif sakstype == "TVI":
+        score += 1
+        reasons.append("sakstype TVI")
+
+    for word in HIGH_PRIORITY_WORDS:
+        if word in saken_gjelder or word in parter:
+            score += 3
+            reasons.append(f'treff på "{word}"')
+
+    for word in MEDIUM_PRIORITY_WORDS:
+        if word in saken_gjelder or word in parter:
+            score += 1
+            reasons.append(f'treff på "{word}"')
+
+    for word in ALWAYS_INTERESTING_PARTIES:
+        if word in parter:
+            score += 2
+            reasons.append(f'part inneholder "{word}"')
+
+    # Fjern duplikater men behold rekkefølge
+    unique_reasons = []
+    for reason in reasons:
+        if reason not in unique_reasons:
+            unique_reasons.append(reason)
+
+    if score >= 6:
+        nivå = "high"
+        label = "🔥 Høy interesse"
+    elif score >= 3:
+        nivå = "medium"
+        label = "👀 Mulig interessant"
+    else:
+        nivå = "low"
+        label = "ℹ️ Ny sak"
+
+    return {
+        "score": score,
+        "nivå": nivå,
+        "label": label,
+        "sakstype": sakstype,
+        "reasons": unique_reasons[:5],
+    }
+
+
+def send_slack_varsel(sakinfo, vurdering):
     if not SLACK_WEBHOOK_URL:
         raise RuntimeError("SLACK_WEBHOOK_URL mangler")
 
+    begrunnelse = "\n".join([f"• {r}" for r in vurdering["reasons"]]) or "• ny sak i domstolen"
+
     payload = {
-        "text": (
-            "⚖️ Ny rettssak funnet\n"
-            f"Domstol: {sakinfo['domstol']}\n"
-            f"Saksnummer: {sakinfo['saksnr']}\n"
-            f"Rettsmøte: {sakinfo['rettsmoete']}\n"
-            f"Saken gjelder: {sakinfo['saken_gjelder']}\n"
-            f"Parter: {sakinfo['parter']}\n"
-            f"Sak: {sakinfo['sakslenke']}"
-        )
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"{vurdering['label']} – {sakinfo['domstol']}"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Saksnummer:* {sakinfo['saksnr']}\n"
+                        f"*Sakstype:* {vurdering['sakstype']}\n"
+                        f"*Rettsmøte:* {sakinfo['rettsmoete']}\n"
+                        f"*Saken gjelder:* {sakinfo['saken_gjelder']}\n"
+                        f"*Parter:* {sakinfo['parter']}\n"
+                        f"*Vurdering:* score {vurdering['score']}"
+                    )
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Hvorfor flagget:*\n{begrunnelse}"
+                }
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Åpne saken"
+                        },
+                        "url": sakinfo["sakslenke"],
+                        "style": "primary"
+                    }
+                ]
+            }
+        ]
     }
 
     response = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=15)
     response.raise_for_status()
-    print(f"Sendte Slack-varsel for {sakinfo['saksnr']}")
+    print(f"Sendte Slack-varsel for {sakinfo['saksnr']} ({vurdering['nivå']})")
 
 
 def main():
     cache = les_cache()
     saker = hent_saker()
 
-    idag = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    grense = idag + timedelta(days=VARSEL_DAGER)
-
     antall_riktig_domstol = 0
     antall_riktig_sakstype = 0
-    antall_innenfor_dato = 0
     antall_sendt = 0
 
     for sak in saker:
@@ -104,17 +219,14 @@ def main():
             continue
         antall_riktig_sakstype += 1
 
-        startdato = sak.get("startdato")
-        if not startdato:
-            continue
-
         sak_id = sak.get("sakId", "")
         cache_key = f"{sak_id}:{saksnr}"
         if cache_key in cache:
-            print(f"Allerede varslet: {saksnr}")
             continue
 
-        rettsmoete = startdato[:10]
+        startdato = sak.get("startdato", "")
+        rettsmoete = startdato[:10] if startdato else "Ukjent"
+
         intervaller = sak.get("rettsmoeteIntervaller") or []
         if intervaller:
             start = intervaller[0].get("start", "")
@@ -131,15 +243,21 @@ def main():
             "sakslenke": bygg_sakslenke(sak_id),
         }
 
-        send_slack_varsel(sakinfo)
+        vurdering = vurder_sak(sak)
+
+        # send bare medium/høy som standard
+        if vurdering["nivå"] in ("medium", "high"):
+            send_slack_varsel(sakinfo, vurdering)
+            antall_sendt += 1
+        else:
+            print(f"Skipper lav interesse: {saksnr}")
+
         cache[cache_key] = datetime.now().isoformat()
-        antall_sendt += 1
 
     skriv_cache(cache)
 
     print(f"Saker i riktig domstol: {antall_riktig_domstol}")
     print(f"Saker med riktig sakstype: {antall_riktig_sakstype}")
-    print(f"Saker innenfor dato: {antall_innenfor_dato}")
     print(f"Slack-varsler sendt: {antall_sendt}")
 
 
