@@ -25,7 +25,7 @@ MEDIUM_PRIORITY_WORDS = [
     "nabotvist", "eiendom", "byggetvist", "entreprise",
 ]
 
-ALWAYS_INTERESTING_PARTIES = [
+INTERESTING_PARTIES = [
     "kommune", "as", "politi", "sykehus", "statsforvalter",
     "skatteetaten", "nav", "skole", "universitet",
 ]
@@ -63,10 +63,10 @@ def hent_saker():
         "Referer": "https://www.domstol.no/no/nar-gar-rettssaken/",
     }
 
-    r = requests.get(API_URL, params=params, headers=headers, timeout=30)
-    r.raise_for_status()
+    response = requests.get(API_URL, params=params, headers=headers, timeout=30)
+    response.raise_for_status()
 
-    data = r.json()
+    data = response.json()
     hits = data.get("hits", [])
     print(f"Hentet {len(hits)} saker fra API-et")
     return hits
@@ -77,10 +77,20 @@ def bygg_sakslenke(sak_id):
 
 
 def finn_sakstype(saksnr):
-    for stype in SAKSTYPER:
-        if stype in saksnr:
-            return stype
+    for sakstype in SAKSTYPER:
+        if sakstype in saksnr:
+            return sakstype
     return "UKJENT"
+
+
+def unike_verdier(verdier):
+    sett = set()
+    resultat = []
+    for verdi in verdier:
+        if verdi not in sett:
+            resultat.append(verdi)
+            sett.add(verdi)
+    return resultat
 
 
 def vurder_sak(sak):
@@ -112,16 +122,12 @@ def vurder_sak(sak):
             score += 1
             reasons.append(f'treff på "{word}"')
 
-    for word in ALWAYS_INTERESTING_PARTIES:
+    for word in INTERESTING_PARTIES:
         if word in parter:
             score += 2
             reasons.append(f'part inneholder "{word}"')
 
-    # Fjern duplikater men behold rekkefølge
-    unique_reasons = []
-    for reason in reasons:
-        if reason not in unique_reasons:
-            unique_reasons.append(reason)
+    reasons = unike_verdier(reasons)
 
     if score >= 6:
         nivå = "high"
@@ -138,15 +144,29 @@ def vurder_sak(sak):
         "nivå": nivå,
         "label": label,
         "sakstype": sakstype,
-        "reasons": unique_reasons[:5],
+        "reasons": reasons[:5],
     }
+
+
+def formater_rettsmoete(sak):
+    startdato = sak.get("startdato", "")
+    rettsmoete = startdato[:10] if startdato else "Ukjent"
+
+    intervaller = sak.get("rettsmoeteIntervaller") or []
+    if intervaller:
+        start = intervaller[0].get("start", "")
+        end = intervaller[0].get("end", "")
+        if start and end:
+            rettsmoete = f"{start} – {end}"
+
+    return rettsmoete
 
 
 def send_slack_varsel(sakinfo, vurdering):
     if not SLACK_WEBHOOK_URL:
         raise RuntimeError("SLACK_WEBHOOK_URL mangler")
 
-    begrunnelse = "\n".join([f"• {r}" for r in vurdering["reasons"]]) or "• ny sak i domstolen"
+    begrunnelse = "\n".join([f"• {grunn}" for grunn in vurdering["reasons"]]) or "• ny sak i domstolen"
 
     payload = {
         "blocks": [
@@ -154,8 +174,8 @@ def send_slack_varsel(sakinfo, vurdering):
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"{vurdering['label']} – {sakinfo['domstol']}"
-                }
+                    "text": f"{vurdering['label']} – {sakinfo['domstol']}",
+                },
             },
             {
                 "type": "section",
@@ -168,15 +188,15 @@ def send_slack_varsel(sakinfo, vurdering):
                         f"*Saken gjelder:* {sakinfo['saken_gjelder']}\n"
                         f"*Parter:* {sakinfo['parter']}\n"
                         f"*Vurdering:* score {vurdering['score']}"
-                    )
-                }
+                    ),
+                },
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Hvorfor flagget:*\n{begrunnelse}"
-                }
+                    "text": f"*Hvorfor flagget:*\n{begrunnelse}",
+                },
             },
             {
                 "type": "actions",
@@ -185,13 +205,13 @@ def send_slack_varsel(sakinfo, vurdering):
                         "type": "button",
                         "text": {
                             "type": "plain_text",
-                            "text": "Åpne saken"
+                            "text": "Åpne saken",
                         },
                         "url": sakinfo["sakslenke"],
-                        "style": "primary"
+                        "style": "primary",
                     }
-                ]
-            }
+                ],
+            },
         ]
     }
 
@@ -206,6 +226,7 @@ def main():
 
     antall_riktig_domstol = 0
     antall_riktig_sakstype = 0
+    antall_nye_saker = 0
     antall_sendt = 0
 
     for sak in saker:
@@ -215,7 +236,7 @@ def main():
         antall_riktig_domstol += 1
 
         saksnr = sak.get("saksnummer", "")
-        if not any(stype in saksnr for stype in SAKSTYPER):
+        if not any(sakstype in saksnr for sakstype in SAKSTYPER):
             continue
         antall_riktig_sakstype += 1
 
@@ -223,21 +244,12 @@ def main():
         cache_key = f"{sak_id}:{saksnr}"
         if cache_key in cache:
             continue
-
-        startdato = sak.get("startdato", "")
-        rettsmoete = startdato[:10] if startdato else "Ukjent"
-
-        intervaller = sak.get("rettsmoeteIntervaller") or []
-        if intervaller:
-            start = intervaller[0].get("start", "")
-            end = intervaller[0].get("end", "")
-            if start and end:
-                rettsmoete = f"{start} – {end}"
+        antall_nye_saker += 1
 
         sakinfo = {
             "domstol": domstol,
             "saksnr": saksnr,
-            "rettsmoete": rettsmoete,
+            "rettsmoete": formater_rettsmoete(sak),
             "saken_gjelder": sak.get("sakenGjelder") or "–",
             "parter": sak.get("parter") or "–",
             "sakslenke": bygg_sakslenke(sak_id),
@@ -245,7 +257,6 @@ def main():
 
         vurdering = vurder_sak(sak)
 
-        # send bare medium/høy som standard
         if vurdering["nivå"] in ("medium", "high"):
             send_slack_varsel(sakinfo, vurdering)
             antall_sendt += 1
@@ -258,6 +269,7 @@ def main():
 
     print(f"Saker i riktig domstol: {antall_riktig_domstol}")
     print(f"Saker med riktig sakstype: {antall_riktig_sakstype}")
+    print(f"Nye saker: {antall_nye_saker}")
     print(f"Slack-varsler sendt: {antall_sendt}")
 
 
