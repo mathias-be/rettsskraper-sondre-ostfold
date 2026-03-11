@@ -14,19 +14,18 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
 SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
 
+# Skal gi HØY interesse
 HIGH_PRIORITY_WORDS = [
     "barn",
     "unge",
     "ungdom",
     "mindreår",
-    "barnevern",
-    "foreldreansvar",
-    "samvær",
-    "omsorgsovertakelse",
+    "mindreårig",
     "ran",
     "drap",
 ]
 
+# Skal gi INTERESSANT, ikke høy
 MEDIUM_PRIORITY_WORDS = [
     "arbeidsforhold",
     "arbeidsmiljø",
@@ -36,13 +35,15 @@ MEDIUM_PRIORITY_WORDS = [
     "ansettelse",
     "trakassering",
     "varsling",
-    "erstatning",
-    "kontrakt",
-    "tvist",
-    "nabotvist",
-    "eiendom",
-    "byggetvist",
-    "entreprise",
+]
+
+# Ord som ofte finnes i familietvister / saker dere normalt ikke vil prioritere opp
+LOW_PRIORITY_WORDS = [
+    "foreldretvist",
+    "foreldreansvar",
+    "samvær",
+    "fast bosted",
+    "barnefordeling",
 ]
 
 INTERESTING_PARTIES = [
@@ -150,28 +151,30 @@ def formater_rettsmoete(sak):
 def vurder_sak(sak):
     saken_gjelder = (sak.get("sakenGjelder") or "").lower()
     parter = (sak.get("parter") or "").lower()
+    samlet_text = f"{saken_gjelder} {parter}"
     saksnr = sak.get("saksnummer", "")
     sakstype = finn_sakstype(saksnr)
 
     score = 0
     reasons = []
 
+    # Alle straffesaker er interessante som basis
     if sakstype == "TOV":
-        score += 2
-        reasons.append("sakstype TOV")
+        score += 3
+        reasons.append("straffesak (TOV)")
     elif sakstype in ("MED", "SKJ"):
         score += 1
         reasons.append(f"sakstype {sakstype}")
-    elif sakstype == "TVI":
-        score += 0
 
+    # Høy interesse
     for word in HIGH_PRIORITY_WORDS:
-        if word in saken_gjelder or word in parter:
+        if word in samlet_text:
             score += 5
             reasons.append(f'treff på "{word}"')
 
+    # Interessant
     for word in MEDIUM_PRIORITY_WORDS:
-        if word in saken_gjelder or word in parter:
+        if word in samlet_text:
             score += 2
             reasons.append(f'treff på "{word}"')
 
@@ -179,6 +182,17 @@ def vurder_sak(sak):
         if word in parter:
             score += 1
             reasons.append(f'part inneholder "{word}"')
+
+    # Trekk ned typiske familietvister, men ikke hvis saken allerede er høy
+    low_hits = []
+    for word in LOW_PRIORITY_WORDS:
+        if word in samlet_text:
+            low_hits.append(word)
+
+    if low_hits:
+        score -= 2
+        for word in low_hits:
+            reasons.append(f'treff på "{word}" (lavere prioritet)')
 
     reasons = unike_verdier(reasons)
 
@@ -197,7 +211,7 @@ def vurder_sak(sak):
         "nivå": nivå,
         "label": label,
         "sakstype": sakstype,
-        "reasons": reasons[:5],
+        "reasons": reasons[:6],
     }
 
 
