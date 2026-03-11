@@ -51,38 +51,13 @@ def hent_saker():
     r.raise_for_status()
 
     data = r.json()
-    return data.get("hits", [])
+    hits = data.get("hits", [])
+    print(f"Hentet {len(hits)} saker fra API-et")
+    return hits
 
 
 def bygg_sakslenke(sak_id):
     return f"https://www.domstol.no/no/nar-gar-rettssaken/?saksid={sak_id}"
-
-
-def skal_varsles(sak, idag, grense):
-    domstol = sak.get("domstol")
-    if domstol != DOMSTOL_NAVN:
-        return False
-
-    saksnr = sak.get("saksnummer", "")
-    if not any(stype in saksnr for stype in SAKSTYPER):
-        return False
-
-    startdato = sak.get("startdato")
-    if not startdato:
-        return False
-
-    sak_dato = datetime.strptime(startdato[:10], "%Y-%m-%d")
-    return idag <= sak_dato <= grense
-
-
-def formater_rettsmoete(sak):
-    intervaller = sak.get("rettsmoeteIntervaller") or []
-    if intervaller:
-        start = intervaller[0].get("start", "")
-        end = intervaller[0].get("end", "")
-        if start and end:
-            return f"{start} – {end}"
-    return sak.get("startdato", "")[:10]
 
 
 def send_slack_varsel(sakinfo):
@@ -90,46 +65,20 @@ def send_slack_varsel(sakinfo):
         raise RuntimeError("SLACK_WEBHOOK_URL mangler")
 
     payload = {
-        "blocks": [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "⚖️ Ny rettssak funnet"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"*Domstol:* {sakinfo['domstol']}\n"
-                        f"*Saksnummer:* {sakinfo['saksnr']}\n"
-                        f"*Rettsmøte:* {sakinfo['rettsmoete']}\n"
-                        f"*Saken gjelder:* {sakinfo['saken_gjelder']}\n"
-                        f"*Parter:* {sakinfo['parter']}"
-                    )
-                }
-            },
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "Åpne saken"
-                        },
-                        "url": sakinfo["sakslenke"],
-                        "style": "primary"
-                    }
-                ]
-            }
-        ]
+        "text": (
+            "⚖️ Ny rettssak funnet\n"
+            f"Domstol: {sakinfo['domstol']}\n"
+            f"Saksnummer: {sakinfo['saksnr']}\n"
+            f"Rettsmøte: {sakinfo['rettsmoete']}\n"
+            f"Saken gjelder: {sakinfo['saken_gjelder']}\n"
+            f"Parter: {sakinfo['parter']}\n"
+            f"Sak: {sakinfo['sakslenke']}"
+        )
     }
 
     response = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=15)
     response.raise_for_status()
+    print(f"Sendte Slack-varsel for {sakinfo['saksnr']}")
 
 
 def main():
@@ -139,21 +88,49 @@ def main():
     idag = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     grense = idag + timedelta(days=VARSEL_DAGER)
 
+    antall_riktig_domstol = 0
+    antall_riktig_sakstype = 0
+    antall_innenfor_dato = 0
+    antall_sendt = 0
+
     for sak in saker:
+        domstol = sak.get("domstol", "")
+        if domstol != DOMSTOL_NAVN:
+            continue
+        antall_riktig_domstol += 1
+
         saksnr = sak.get("saksnummer", "")
+        if not any(stype in saksnr for stype in SAKSTYPER):
+            continue
+        antall_riktig_sakstype += 1
+
+        startdato = sak.get("startdato")
+        if not startdato:
+            continue
+
+        sak_dato = datetime.strptime(startdato[:10], "%Y-%m-%d")
+        if not (idag <= sak_dato <= grense):
+            continue
+        antall_innenfor_dato += 1
+
         sak_id = sak.get("sakId", "")
         cache_key = f"{sak_id}:{saksnr}"
-
         if cache_key in cache:
+            print(f"Allerede varslet: {saksnr}")
             continue
 
-        if not skal_varsles(sak, idag, grense):
-            continue
+        rettsmoete = startdato[:10]
+        intervaller = sak.get("rettsmoeteIntervaller") or []
+        if intervaller:
+            start = intervaller[0].get("start", "")
+            end = intervaller[0].get("end", "")
+            if start and end:
+                rettsmoete = f"{start} – {end}"
 
         sakinfo = {
-            "domstol": sak.get("domstol", "Ukjent domstol"),
+            "domstol": domstol,
             "saksnr": saksnr,
-            "rettsmoete": formater_rettsmoete(sak),
+            "rettsmoete": rettsmoete,
             "saken_gjelder": sak.get("sakenGjelder") or "–",
             "parter": sak.get("parter") or "–",
             "sakslenke": bygg_sakslenke(sak_id),
@@ -161,8 +138,14 @@ def main():
 
         send_slack_varsel(sakinfo)
         cache[cache_key] = datetime.now().isoformat()
+        antall_sendt += 1
 
     skriv_cache(cache)
+
+    print(f"Saker i riktig domstol: {antall_riktig_domstol}")
+    print(f"Saker med riktig sakstype: {antall_riktig_sakstype}")
+    print(f"Saker innenfor dato: {antall_innenfor_dato}")
+    print(f"Slack-varsler sendt: {antall_sendt}")
 
 
 if __name__ == "__main__":
