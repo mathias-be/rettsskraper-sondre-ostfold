@@ -108,11 +108,6 @@ def main():
         if not startdato:
             continue
 
-        sak_dato = datetime.strptime(startdato[:10], "%Y-%m-%d")
-        if not (idag <= sak_dato <= grense):
-            continue
-        antall_innenfor_dato += 1
-
         sak_id = sak.get("sakId", "")
         cache_key = f"{sak_id}:{saksnr}"
         if cache_key in cache:
