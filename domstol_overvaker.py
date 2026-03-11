@@ -93,6 +93,30 @@ def unike_verdier(verdier):
     return resultat
 
 
+def parse_sak_dato(sak):
+    startdato = sak.get("startdato")
+    if not startdato:
+        return None
+    try:
+        return datetime.strptime(startdato[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def formater_rettsmoete(sak):
+    startdato = sak.get("startdato", "")
+    rettsmoete = startdato[:10] if startdato else "Ukjent"
+
+    intervaller = sak.get("rettsmoeteIntervaller") or []
+    if intervaller:
+        start = intervaller[0].get("start", "")
+        end = intervaller[0].get("end", "")
+        if start and end:
+            rettsmoete = f"{start} – {end}"
+
+    return rettsmoete
+
+
 def vurder_sak(sak):
     saken_gjelder = (sak.get("sakenGjelder") or "").lower()
     parter = (sak.get("parter") or "").lower()
@@ -146,20 +170,6 @@ def vurder_sak(sak):
         "sakstype": sakstype,
         "reasons": reasons[:5],
     }
-
-
-def formater_rettsmoete(sak):
-    startdato = sak.get("startdato", "")
-    rettsmoete = startdato[:10] if startdato else "Ukjent"
-
-    intervaller = sak.get("rettsmoeteIntervaller") or []
-    if intervaller:
-        start = intervaller[0].get("start", "")
-        end = intervaller[0].get("end", "")
-        if start and end:
-            rettsmoete = f"{start} – {end}"
-
-    return rettsmoete
 
 
 def send_slack_varsel(sakinfo, vurdering):
@@ -224,8 +234,11 @@ def main():
     cache = les_cache()
     saker = hent_saker()
 
+    idag = datetime.now().date()
+
     antall_riktig_domstol = 0
     antall_riktig_sakstype = 0
+    antall_fremtidige = 0
     antall_nye_saker = 0
     antall_sendt = 0
 
@@ -239,6 +252,16 @@ def main():
         if not any(sakstype in saksnr for sakstype in SAKSTYPER):
             continue
         antall_riktig_sakstype += 1
+
+        sak_dato = parse_sak_dato(sak)
+        if sak_dato is None:
+            print(f"Skipper uten gyldig dato: {saksnr}")
+            continue
+
+        if sak_dato < idag:
+            print(f"Skipper gammel sak: {saksnr} ({sak_dato})")
+            continue
+        antall_fremtidige += 1
 
         sak_id = sak.get("sakId", "")
         cache_key = f"{sak_id}:{saksnr}"
@@ -269,6 +292,7 @@ def main():
 
     print(f"Saker i riktig domstol: {antall_riktig_domstol}")
     print(f"Saker med riktig sakstype: {antall_riktig_sakstype}")
+    print(f"Fremtidige saker: {antall_fremtidige}")
     print(f"Nye saker: {antall_nye_saker}")
     print(f"Slack-varsler sendt: {antall_sendt}")
 
