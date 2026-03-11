@@ -15,20 +15,45 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
 
 HIGH_PRIORITY_WORDS = [
-    "drap", "voldtekt", "seksu", "overgrep", "mishandling", "vold",
-    "ran", "underslag", "bedrageri", "svindel", "korrupsjon",
-    "oppsigelse", "avskjed", "arbeidsmiljø", "barnevern",
-    "kommune", "politiet", "sykehus", "skole", "offentlig",
+    "barn",
+    "unge",
+    "ungdom",
+    "mindreår",
+    "barnevern",
+    "foreldreansvar",
+    "samvær",
+    "omsorgsovertakelse",
+    "ran",
+    "drap",
 ]
 
 MEDIUM_PRIORITY_WORDS = [
-    "erstatning", "kontrakt", "tvist", "arbeidsrett",
-    "nabotvist", "eiendom", "byggetvist", "entreprise",
+    "arbeidsforhold",
+    "arbeidsmiljø",
+    "arbeidsrett",
+    "oppsigelse",
+    "avskjed",
+    "ansettelse",
+    "trakassering",
+    "varsling",
+    "erstatning",
+    "kontrakt",
+    "tvist",
+    "nabotvist",
+    "eiendom",
+    "byggetvist",
+    "entreprise",
 ]
 
 INTERESTING_PARTIES = [
-    "kommune", "as", "politi", "sykehus", "statsforvalter",
-    "skatteetaten", "nav", "skole", "universitet",
+    "kommune",
+    "politi",
+    "sykehus",
+    "statsforvalter",
+    "skatteetaten",
+    "nav",
+    "skole",
+    "universitet",
 ]
 
 
@@ -132,41 +157,40 @@ def vurder_sak(sak):
     reasons = []
 
     if sakstype == "TOV":
-        score += 3
+        score += 2
         reasons.append("sakstype TOV")
     elif sakstype in ("MED", "SKJ"):
-        score += 2
+        score += 1
         reasons.append(f"sakstype {sakstype}")
     elif sakstype == "TVI":
-        score += 1
-        reasons.append("sakstype TVI")
+        score += 0
 
     for word in HIGH_PRIORITY_WORDS:
         if word in saken_gjelder or word in parter:
-            score += 3
+            score += 5
             reasons.append(f'treff på "{word}"')
 
     for word in MEDIUM_PRIORITY_WORDS:
         if word in saken_gjelder or word in parter:
-            score += 1
+            score += 2
             reasons.append(f'treff på "{word}"')
 
     for word in INTERESTING_PARTIES:
         if word in parter:
-            score += 2
+            score += 1
             reasons.append(f'part inneholder "{word}"')
 
     reasons = unike_verdier(reasons)
 
-    if score >= 6:
+    if score >= 5:
         nivå = "high"
         label = "🔥 Høy interesse"
-    elif score >= 3:
+    elif score >= 2:
         nivå = "medium"
-        label = "👀 Mulig interessant"
+        label = "👀 Interessant"
     else:
         nivå = "low"
-        label = "ℹ️ Ny sak"
+        label = "ℹ️ Lav prioritet"
 
     return {
         "score": score,
@@ -202,7 +226,7 @@ def send_slack_varsel(sakinfo, vurdering):
                         f"*Rettsmøte:* {sakinfo['rettsmoete']}\n"
                         f"*Saken gjelder:* {sakinfo['saken_gjelder']}\n"
                         f"*Parter:* {sakinfo['parter']}\n"
-                        f"*Vurdering:* score {vurdering['score']}"
+                        f"*Prioritet:* {vurdering['label']} (score {vurdering['score']})"
                     ),
                 },
             },
@@ -283,7 +307,7 @@ def main():
             send_slack_varsel(sakinfo, vurdering)
             antall_sendt += 1
         else:
-            print(f"Skipper lav interesse: {saksnr}")
+            print(f"Skipper lav prioritet: {saksnr}")
 
         cache[cache_key] = datetime.now().isoformat()
 
