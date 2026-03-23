@@ -12,9 +12,9 @@ DOMSTOL_NAVN = "Søndre Østfold tingrett"
 DOMSTOL_ID = os.environ.get("DOMSTOL_ID")
 
 WEBHOOK_TSOS_TFRE = os.environ.get("SLACK_WEBHOOK_TSOS_TFRE")
-WEBHOOK_TMSS = os.environ.get("SLACK_WEBHOOK_TMSS")
-WEBHOOK_THAL = os.environ.get("SLACK_WEBHOOK_THAL")
-WEBHOOK_TSAR = os.environ.get("SLACK_WEBHOOK_TSAR")
+WEBHOOK_TMSS = os.environ.get("SLACK_WEBHOOK_TSOS_TMSS")
+WEBHOOK_THAL = os.environ.get("SLACK_WEBHOOK_TSOS_THAL")
+WEBHOOK_TSAR = os.environ.get("SLACK_WEBHOOK_TSOS_TSAR")
 WEBHOOK_DEFAULT = os.environ.get("SLACK_WEBHOOK_DEFAULT")
 
 SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
