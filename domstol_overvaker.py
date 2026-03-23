@@ -10,7 +10,12 @@ CACHE_FILE = Path("cache.json")
 
 DOMSTOL_NAVN = "Søndre Østfold tingrett"
 DOMSTOL_ID = os.environ.get("DOMSTOL_ID")
-SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
+
+WEBHOOK_TSOS_TFRE = os.environ.get("SLACK_WEBHOOK_TSOS_TFRE")
+WEBHOOK_TMSS = os.environ.get("SLACK_WEBHOOK_TMSS")
+WEBHOOK_THAL = os.environ.get("SLACK_WEBHOOK_THAL")
+WEBHOOK_TSAR = os.environ.get("SLACK_WEBHOOK_TSAR")
+WEBHOOK_DEFAULT = os.environ.get("SLACK_WEBHOOK_DEFAULT")
 
 SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
 
@@ -263,9 +268,38 @@ def vurder_sak(sak):
     }
 
 
+def finn_rettsstedkode(saksnr):
+    deler = saksnr.split("-")
+    if len(deler) < 3:
+        return None
+
+    hale = deler[-1]  # f.eks. TSOS, TMSS, THAL
+    if len(hale) >= 4:
+        return hale[-4:]
+    return hale
+
+
+def velg_webhook(saksnr):
+    kode = finn_rettsstedkode(saksnr)
+
+    if kode in ("TSOS", "TFRE"):
+        return WEBHOOK_TSOS_TFRE, "TSOS/TFRE"
+    if kode == "TMSS":
+        return WEBHOOK_TMSS, "TMSS"
+    if kode == "THAL":
+        return WEBHOOK_THAL, "THAL"
+    if kode == "TSAR":
+        return WEBHOOK_TSAR, "TSAR"
+
+    return WEBHOOK_DEFAULT, "DEFAULT"
+
+
 def send_slack_varsel(sakinfo, vurdering):
-    if not SLACK_WEBHOOK_URL:
-        raise RuntimeError("SLACK_WEBHOOK_URL mangler")
+    webhook_url, kanalgruppe = velg_webhook(sakinfo["saksnr"])
+
+    if not webhook_url:
+        print(f"Ingen webhook satt for {kanalgruppe}, hopper over {sakinfo['saksnr']}")
+        return
 
     begrunnelse = "\n".join([f"• {grunn}" for grunn in vurdering["reasons"]]) or "• ny sak i domstolen"
 
@@ -284,6 +318,7 @@ def send_slack_varsel(sakinfo, vurdering):
                     "type": "mrkdwn",
                     "text": (
                         f"*Saksnummer:* {sakinfo['saksnr']}\n"
+                        f"*Rettssted:* {kanalgruppe}\n"
                         f"*Sakstype:* {vurdering['sakstype']}\n"
                         f"*Rettsmøte:* {sakinfo['rettsmoete']}\n"
                         f"*Saken gjelder:* {sakinfo['saken_gjelder']}\n"
@@ -316,9 +351,9 @@ def send_slack_varsel(sakinfo, vurdering):
         ]
     }
 
-    response = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=15)
+    response = requests.post(webhook_url, json=payload, timeout=15)
     response.raise_for_status()
-    print(f"Sendte Slack-varsel for {sakinfo['saksnr']} ({vurdering['nivå']})")
+    print(f"Sendte Slack-varsel for {sakinfo['saksnr']} til {kanalgruppe}")
 
 
 def main():
@@ -364,7 +399,6 @@ def main():
         }
 
         vurdering = vurder_sak(sak)
-
         send_slack_varsel(sakinfo, vurdering)
         antall_sendt += 1
 
