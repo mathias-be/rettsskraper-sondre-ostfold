@@ -17,12 +17,9 @@ SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
 HIGH_PRIORITY_WORDS = [
     "barn",
     "unge",
-    "narkotika", 
     "ungdom",
     "mindreår",
     "mindreårig",
-    "grov",
-    "førstegangsfengsling", 
     "ran",
     "drap",
 ]
@@ -55,6 +52,13 @@ INTERESTING_PARTIES = [
     "nav",
     "skole",
     "universitet",
+]
+
+FIRST_FENGSLING_WORDS = [
+    "førstegangsfengsling",
+    "fengsling",
+    "varetektsfengsling",
+    "varetekt",
 ]
 
 HEADERS = {
@@ -189,10 +193,18 @@ def vurder_sak(sak):
     saksnr = sak.get("saksnummer", "")
     sakstype = finn_sakstype(saksnr)
 
+    if any(word in samlet_text for word in FIRST_FENGSLING_WORDS):
+        return {
+            "score": 999,
+            "nivå": "high",
+            "label": "🚨 Førstegangsfengsling",
+            "sakstype": sakstype,
+            "reasons": ["fengslingssak"],
+        }
+
     score = 0
     reasons = []
 
-    # Alle straffesaker er interessante som basis
     if sakstype == "TOV":
         score += 3
         reasons.append("straffesak (TOV)")
@@ -353,7 +365,6 @@ def main():
 
         vurdering = vurder_sak(sak)
 
-        # SEND ALLTID, også low og MED
         send_slack_varsel(sakinfo, vurdering)
         antall_sendt += 1
 
