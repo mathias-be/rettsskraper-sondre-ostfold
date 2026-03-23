@@ -15,7 +15,7 @@ WEBHOOK_TSOS_TFRE = os.environ.get("SLACK_WEBHOOK_TSOS_TFRE")
 WEBHOOK_TMSS = os.environ.get("SLACK_WEBHOOK_TSOS_TMSS")
 WEBHOOK_THAL = os.environ.get("SLACK_WEBHOOK_TSOS_THAL")
 WEBHOOK_TSAR = os.environ.get("SLACK_WEBHOOK_TSOS_TSAR")
-WEBHOOK_DEFAULT = os.environ.get("SLACK_WEBHOOK_DEFAULT")
+WEBHOOK_DEFAULT = os.environ.get("SLACK_WEBHOOK_URL")
 
 SAKSTYPER = ("TVI", "TOV", "MED", "SKJ")
 
@@ -57,13 +57,6 @@ INTERESTING_PARTIES = [
     "nav",
     "skole",
     "universitet",
-]
-
-FIRST_FENGSLING_WORDS = [
-    "førstegangsfengsling",
-    "fengsling",
-    "varetektsfengsling",
-    "varetekt",
 ]
 
 HEADERS = {
@@ -191,20 +184,60 @@ def formater_rettsmoete(sak):
     return rettsmoete
 
 
+def hent_soketekst(sak):
+    deler = [
+        sak.get("sakenGjelder") or "",
+        sak.get("parter") or "",
+        sak.get("domstol") or "",
+        sak.get("saksnummer") or "",
+        sak.get("sakstype") or "",
+        sak.get("avgjorelse") or "",
+        sak.get("avgjørelse") or "",
+        sak.get("tittel") or "",
+        sak.get("beskrivelse") or "",
+        sak.get("merknad") or "",
+    ]
+
+    intervaller = sak.get("rettsmoeteIntervaller") or []
+    for intervall in intervaller:
+        if isinstance(intervall, dict):
+            for value in intervall.values():
+                if isinstance(value, str):
+                    deler.append(value)
+
+    return " ".join(deler).lower()
+
+
 def vurder_sak(sak):
     saken_gjelder = (sak.get("sakenGjelder") or "").lower()
     parter = (sak.get("parter") or "").lower()
-    samlet_text = f"{saken_gjelder} {parter}"
-    saksnr = sak.get("saksnummer", "")
+    sakstype_felt = (sak.get("sakstype") or "").lower()
+    avgjorelse = ((sak.get("avgjorelse") or "") + " " + (sak.get("avgjørelse") or "")).lower()
+    saksnr = (sak.get("saksnummer") or "").lower()
+    samlet_text = hent_soketekst(sak)
     sakstype = finn_sakstype(saksnr)
 
-    if any(word in samlet_text for word in FIRST_FENGSLING_WORDS):
+    er_forstegangsfengsling = any([
+        "førstegangsfengsling" in samlet_text,
+        "førstegangsfengsling" in saken_gjelder,
+        "førstegangsfengsling" in avgjorelse,
+        "fengslingskjennelse" in avgjorelse,
+        "sakstype: fengsling" in samlet_text,
+        sakstype_felt == "fengsling",
+        " ene-" in f" {saksnr} ",
+        saksnr.startswith("ene-"),
+        "-ene-" in saksnr,
+    ])
+
+    if er_forstegangsfengsling:
         return {
             "score": 999,
             "nivå": "high",
             "label": "🚨 Førstegangsfengsling",
-            "sakstype": sakstype,
-            "reasons": ["fengslingssak"],
+            "sakstype": sakstype if sakstype != "UKJENT" else "Fengsling",
+            "reasons": [
+                "saken gjelder/avgjørelse/sakstype tyder på førstegangsfengsling"
+            ],
         }
 
     score = 0
@@ -273,10 +306,10 @@ def finn_rettsstedkode(saksnr):
     if len(deler) < 3:
         return None
 
-    hale = deler[-1]  # f.eks. TSOS, TMSS, THAL
-    if len(hale) >= 4:
-        return hale[-4:]
-    return hale
+    hale = deler[-1]
+    if "/" in hale:
+        return hale.split("/")[-1]
+    return hale[-4:]
 
 
 def velg_webhook(saksnr):
@@ -299,7 +332,7 @@ def send_slack_varsel(sakinfo, vurdering):
 
     if not webhook_url:
         print(f"Ingen webhook satt for {kanalgruppe}, hopper over {sakinfo['saksnr']}")
-        return
+        return False
 
     begrunnelse = "\n".join([f"• {grunn}" for grunn in vurdering["reasons"]]) or "• ny sak i domstolen"
 
@@ -354,6 +387,7 @@ def send_slack_varsel(sakinfo, vurdering):
     response = requests.post(webhook_url, json=payload, timeout=15)
     response.raise_for_status()
     print(f"Sendte Slack-varsel for {sakinfo['saksnr']} til {kanalgruppe}")
+    return True
 
 
 def main():
@@ -362,10 +396,17 @@ def main():
 
     idag = datetime.now().date()
 
+    print("TSOS/TFRE webhook satt:", bool(WEBHOOK_TSOS_TFRE))
+    print("TMSS webhook satt:", bool(WEBHOOK_TMSS))
+    print("THAL webhook satt:", bool(WEBHOOK_THAL))
+    print("TSAR webhook satt:", bool(WEBHOOK_TSAR))
+    print("Fallback webhook satt:", bool(WEBHOOK_DEFAULT))
+
     antall_riktig_sakstype = 0
     antall_fremtidige = 0
     antall_nye_saker = 0
     antall_sendt = 0
+    antall_lav_prio = 0
 
     for sak in saker:
         saksnr = sak.get("saksnummer", "")
@@ -399,8 +440,14 @@ def main():
         }
 
         vurdering = vurder_sak(sak)
-        send_slack_varsel(sakinfo, vurdering)
-        antall_sendt += 1
+
+        if vurdering["nivå"] == "low":
+            print(f"Skipper lav prioritet: {saksnr}")
+            antall_lav_prio += 1
+        else:
+            sendt = send_slack_varsel(sakinfo, vurdering)
+            if sendt:
+                antall_sendt += 1
 
         cache[cache_key] = datetime.now().isoformat()
 
@@ -409,6 +456,7 @@ def main():
     print(f"Saker med riktig sakstype: {antall_riktig_sakstype}")
     print(f"Fremtidige saker: {antall_fremtidige}")
     print(f"Nye saker: {antall_nye_saker}")
+    print(f"Lav prioritet skippet: {antall_lav_prio}")
     print(f"Slack-varsler sendt: {antall_sendt}")
 
 
