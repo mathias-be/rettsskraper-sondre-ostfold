@@ -24,10 +24,14 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run scraper
+          - name: Run scraper
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           DOMSTOL_ID: ${{ secrets.DOMSTOL_ID }}
+          SLACK_WEBHOOK_TSOS_TFRE: ${{ secrets.SLACK_WEBHOOK_TSOS_TFRE }}
+          SLACK_WEBHOOK_TSOS_TMSS: ${{ secrets.SLACK_WEBHOOK_TSOS_TMSS }}
+          SLACK_WEBHOOK_TSOS_THAL: ${{ secrets.SLACK_WEBHOOK_TSOS_THAL }}
+          SLACK_WEBHOOK_TSOS_TSAR: ${{ secrets.SLACK_WEBHOOK_TSOS_TSAR }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: python domstol_overvaker.py
 
       - name: Commit cache
