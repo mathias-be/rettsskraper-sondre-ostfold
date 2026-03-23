@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-          - name: Run scraper
+      - name: Run scraper
         env:
           DOMSTOL_ID: ${{ secrets.DOMSTOL_ID }}
           SLACK_WEBHOOK_TSOS_TFRE: ${{ secrets.SLACK_WEBHOOK_TSOS_TFRE }}
