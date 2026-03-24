@@ -11,6 +11,7 @@ CACHE_FILE = Path("cache.json")
 DOMSTOL_NAVN = "Søndre Østfold tingrett"
 DOMSTOL_ID = os.environ.get("DOMSTOL_ID")
 
+# Matcher secret-navnene du allerede har i GitHub
 WEBHOOK_TSOS_TFRE = os.environ.get("SLACK_WEBHOOK_TSOS_TFRE")
 WEBHOOK_TMSS = os.environ.get("SLACK_WEBHOOK_TSOS_TMSS")
 WEBHOOK_THAL = os.environ.get("SLACK_WEBHOOK_TSOS_THAL")
@@ -208,6 +209,29 @@ def hent_soketekst(sak):
     return " ".join(deler).lower()
 
 
+def er_fengslingssak(sak):
+    saken_gjelder = (sak.get("sakenGjelder") or "").lower()
+    sakstype_felt = (sak.get("sakstype") or "").lower()
+    avgjorelse = ((sak.get("avgjorelse") or "") + " " + (sak.get("avgjørelse") or "")).lower()
+    saksnr = (sak.get("saksnummer") or "").lower()
+    samlet_text = hent_soketekst(sak)
+
+    return any([
+        "førstegangsfengsling" in samlet_text,
+        "førstegangsfengsling" in saken_gjelder,
+        "førstegangsfengsling" in avgjorelse,
+        "fengsling" in samlet_text,
+        "varetektsfengsling" in samlet_text,
+        "varetekt" in samlet_text,
+        "fengslingskjennelse" in avgjorelse,
+        "sakstype: fengsling" in samlet_text,
+        sakstype_felt == "fengsling",
+        " ene-" in f" {saksnr} ",
+        saksnr.startswith("ene-"),
+        "-ene-" in saksnr,
+    ])
+
+
 def vurder_sak(sak):
     saken_gjelder = (sak.get("sakenGjelder") or "").lower()
     parter = (sak.get("parter") or "").lower()
@@ -217,26 +241,14 @@ def vurder_sak(sak):
     samlet_text = hent_soketekst(sak)
     sakstype = finn_sakstype(saksnr)
 
-    er_forstegangsfengsling = any([
-        "førstegangsfengsling" in samlet_text,
-        "førstegangsfengsling" in saken_gjelder,
-        "førstegangsfengsling" in avgjorelse,
-        "fengslingskjennelse" in avgjorelse,
-        "sakstype: fengsling" in samlet_text,
-        sakstype_felt == "fengsling",
-        " ene-" in f" {saksnr} ",
-        saksnr.startswith("ene-"),
-        "-ene-" in saksnr,
-    ])
-
-    if er_forstegangsfengsling:
+    if er_fengslingssak(sak):
         return {
             "score": 999,
             "nivå": "high",
             "label": "🚨 Førstegangsfengsling",
             "sakstype": sakstype if sakstype != "UKJENT" else "Fengsling",
             "reasons": [
-                "saken gjelder/avgjørelse/sakstype tyder på førstegangsfengsling"
+                "saken gjelder/avgjørelse/sakstype tyder på fengslingssak"
             ],
         }
 
@@ -281,6 +293,16 @@ def vurder_sak(sak):
             reasons.append(f'treff på "{word}" (lavere prioritet)')
 
     reasons = unike_verdier(reasons)
+
+    # MED skal aldri bli lav prioritet
+    if sakstype == "MED" and score < 2:
+        score = 2
+        reasons.append("MED løftet til minst interessant")
+
+    # ENE skal aldri bli lav prioritet
+    if "ene" in saksnr and score < 2:
+        score = 2
+        reasons.append("ENE løftet til minst interessant")
 
     if score >= 5:
         nivå = "high"
@@ -395,15 +417,10 @@ def main():
     saker = hent_alle_saker()
 
     idag = datetime.now().date()
-
-    print("TSOS/TFRE webhook satt:", bool(WEBHOOK_TSOS_TFRE))
-    print("TMSS webhook satt:", bool(WEBHOOK_TMSS))
-    print("THAL webhook satt:", bool(WEBHOOK_THAL))
-    print("TSAR webhook satt:", bool(WEBHOOK_TSAR))
-    print("Fallback webhook satt:", bool(WEBHOOK_DEFAULT))
+    grense_fengsling = idag - timedelta(days=2)
 
     antall_riktig_sakstype = 0
-    antall_fremtidige = 0
+    antall_innenfor_dato = 0
     antall_nye_saker = 0
     antall_sendt = 0
     antall_lav_prio = 0
@@ -419,10 +436,18 @@ def main():
             print(f"Skipper uten gyldig dato: {saksnr}")
             continue
 
-        if sak_dato < idag:
-            print(f"Skipper gammel sak: {saksnr} ({sak_dato})")
-            continue
-        antall_fremtidige += 1
+        fengsling = er_fengslingssak(sak)
+
+        if fengsling:
+            if sak_dato < grense_fengsling:
+                print(f"Skipper gammel fengslingssak: {saksnr} ({sak_dato})")
+                continue
+        else:
+            if sak_dato < idag:
+                print(f"Skipper gammel sak: {saksnr} ({sak_dato})")
+                continue
+
+        antall_innenfor_dato += 1
 
         sak_id = sak.get("sakId", "")
         cache_key = f"{sak_id}:{saksnr}"
@@ -454,7 +479,7 @@ def main():
     skriv_cache(cache)
 
     print(f"Saker med riktig sakstype: {antall_riktig_sakstype}")
-    print(f"Fremtidige saker: {antall_fremtidige}")
+    print(f"Saker innenfor datoregler: {antall_innenfor_dato}")
     print(f"Nye saker: {antall_nye_saker}")
     print(f"Lav prioritet skippet: {antall_lav_prio}")
     print(f"Slack-varsler sendt: {antall_sendt}")
