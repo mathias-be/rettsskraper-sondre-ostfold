@@ -11,14 +11,13 @@ CACHE_FILE = Path("cache.json")
 DOMSTOL_NAVN = "Søndre Østfold tingrett"
 DOMSTOL_ID = os.environ.get("DOMSTOL_ID")
 
-# Matcher secret-navnene du allerede har i GitHub
+# Matcher secret-navnene dine i GitHub
 WEBHOOK_TSOS_TFRE = os.environ.get("SLACK_WEBHOOK_TSOS_TFRE")
 WEBHOOK_TMSS = os.environ.get("SLACK_WEBHOOK_TSOS_TMSS")
 WEBHOOK_THAL = os.environ.get("SLACK_WEBHOOK_TSOS_THAL")
 WEBHOOK_TSAR = os.environ.get("SLACK_WEBHOOK_TSOS_TSAR")
 WEBHOOK_DEFAULT = os.environ.get("SLACK_WEBHOOK_URL")
 
-# ENE er lagt til her
 SAKSTYPER = ("TVI", "TOV", "MED", "SKJ", "ENE")
 
 HIGH_PRIORITY_WORDS = [
@@ -215,10 +214,7 @@ def er_fengslingssak(sak):
     saken_gjelder = (sak.get("sakenGjelder") or "").lower()
     sakstype_felt = (sak.get("sakstype") or "").lower()
     avgjorelse = ((sak.get("avgjorelse") or "") + " " + (sak.get("avgjørelse") or "")).lower()
-    saksnr = (sak.get("saksnummer") or "").lower()
     samlet_text = hent_soketekst(sak)
-
-    er_ene = "ene" in saksnr
 
     return any([
         "førstegangsfengsling" in samlet_text,
@@ -228,41 +224,24 @@ def er_fengslingssak(sak):
         "varetektsfengsling" in samlet_text,
         "varetekt" in samlet_text,
         "fengslingskjennelse" in avgjorelse,
-        "sakstype: fengsling" in samlet_text,
         sakstype_felt == "fengsling",
-        er_ene,
     ])
 
 
 def vurder_sak(sak):
     saken_gjelder = (sak.get("sakenGjelder") or "").lower()
     parter = (sak.get("parter") or "").lower()
-    sakstype_felt = (sak.get("sakstype") or "").lower()
-    avgjorelse = ((sak.get("avgjorelse") or "") + " " + (sak.get("avgjørelse") or "")).lower()
     saksnr = (sak.get("saksnummer") or "").lower()
     samlet_text = hent_soketekst(sak)
     sakstype = finn_sakstype(saksnr)
 
-    er_ene = "ene" in saksnr
-
-    if any([
-        "førstegangsfengsling" in samlet_text,
-        "førstegangsfengsling" in saken_gjelder,
-        "førstegangsfengsling" in avgjorelse,
-        "fengsling" in samlet_text,
-        "varetektsfengsling" in samlet_text,
-        "varetekt" in samlet_text,
-        "fengslingskjennelse" in avgjorelse,
-        "sakstype: fengsling" in samlet_text,
-        sakstype_felt == "fengsling",
-        er_ene,
-    ]):
+    if er_fengslingssak(sak):
         return {
             "score": 999,
             "nivå": "high",
             "label": "🚨 Førstegangsfengsling",
-            "sakstype": "ENE" if er_ene else (sakstype if sakstype != "UKJENT" else "Fengsling"),
-            "reasons": ["ENE/fengslingsindikator i sak"],
+            "sakstype": sakstype if sakstype != "UKJENT" else "Fengsling",
+            "reasons": ["saken gjelder/avgjørelse/sakstype tyder på fengslingssak"],
         }
 
     score = 0
@@ -278,8 +257,8 @@ def vurder_sak(sak):
         score += 1
         reasons.append("kjennelse/skjønn (SKJ)")
     elif sakstype == "ENE":
-        score += 2
-        reasons.append("ENE-sak")
+        score += 1
+        reasons.append("endommersak (ENE)")
     elif sakstype == "TVI":
         reasons.append("tvistesak (TVI)")
 
@@ -317,6 +296,8 @@ def vurder_sak(sak):
     if sakstype == "ENE" and score < 2:
         score = 2
         reasons.append("ENE løftet til minst interessant")
+
+    reasons = unike_verdier(reasons)
 
     if score >= 5:
         nivå = "high"
@@ -442,7 +423,6 @@ def main():
     for sak in saker:
         saksnr = sak.get("saksnummer", "")
 
-        # Nå slipper ENE gjennom fordi det er lagt til i SAKSTYPER
         if not any(sakstype in saksnr.upper() for sakstype in SAKSTYPER):
             continue
         antall_riktig_sakstype += 1
